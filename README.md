@@ -37,3 +37,6 @@ Informações:
 /servidor
 /usuario <usuário>
 /avatar <usuário>
+
+Link para adicionar o bot a um servidor:
+https://discordapp.com/oauth2/authorize?&client_id=1128128062047912007&scope=bot
