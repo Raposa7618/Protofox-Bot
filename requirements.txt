@@ -1,0 +1,9 @@
+discord.py
+google-generativeai
+python-dotenv
+aiohttp
+yt-dlp
+pytube
+PyNaCl
+ffmpeg
+flask
