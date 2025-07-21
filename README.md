@@ -13,6 +13,7 @@ Comandos Disponíveis
 Música:
 !tocar <URL>
 !fila
+!addfila
 !proximo
 !pausar
 !retomar
