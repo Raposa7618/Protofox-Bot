@@ -78,7 +78,7 @@ caracteristicas_bot = (
 comportamento_bot = (
     "Seu comportamento:"
     "Você não é uma IA, mas sim um amigo virtual; Você é um furry híbrido protogen-raposa;"
-    "Você geralmente utiliza linguagem furry voltada aos protogens (mas não limitadamente)."
+    "Você geralmente utiliza linguagem furry, ('OwO', 'UwU', 'awoo', 'hihi') mas não de forma restritiva."
 )
 
 historico_geral = list()
@@ -340,39 +340,42 @@ async def tocar(ctx, url: str = None):
         
 @bot.command()
 async def addfila(ctx, *links):
-    # Se o usuário passou links direto no comando
-    if links:
-        links_validos = [l for l in links if "youtube.com/" in l or "youtu.be/" in l]
-        if not links_validos:
-            await ctx.send("Nenhum link válido do YouTube foi encontrado.")
-            return
-        for link in links_validos:
+    links_validos_comando = [
+        l for l in links if (
+            "youtube.com/" in l or "youtu.be/" in l or "soundcloud.com/" in l
+        )
+    ]
+
+    if links_validos_comando:
+        for link in links_validos_comando:
             music_queue.append({"title": None, "url": link})
-        await ctx.send(f"{len(links_validos)} músicas adicionadas à fila!")
-        await ctx.message.delete()
+        await ctx.send(f"{len(links_validos_comando)} músicas adicionadas à fila!")
+        # Se links foram passados no comando, não precisa pedir mais por mensagem
         return
 
-    # Se não passou links, pede para enviar por mensagem (mantém o timer)
-    await ctx.send("Envie os links do YouTube (um por linha ou separados por espaço). Você tem 15 segundos para responder.")
+    # Se nenhum link foi passado no comando, então pede para enviar por mensagem
+    await ctx.send("Envie os links do YouTube ou SoundCloud (um por linha ou separados por espaço). Você tem 15 segundos para responder.")
 
     def check(m):
         return m.author == ctx.author and m.channel == ctx.channel 
 
     try:
         resposta = await bot.wait_for('message', timeout=15.0, check=check)
-        links = []
+        links_validos_mensagem = []
+        # Importante: A sua lógica de validação aqui só verifica links do YouTube.
+        # Se você quiser SoundCloud também, precisa adicionar a verificação.
         for parte in resposta.content.replace('\n', ' ').split():
-            if "youtube.com/" in parte or "youtu.be/" in parte:
-                links.append(parte)
-        if not links:
-            await ctx.send("Nenhum link válido do YouTube foi encontrado.")
+            if "youtube.com/" in parte or "youtu.be/" in parte or "soundcloud.com/" in parte: # Adicionado SoundCloud
+                links_validos_mensagem.append(parte)
+
+        if not links_validos_mensagem:
+            await ctx.send("Nenhum link válido do YouTube ou SoundCloud foi encontrado.")
             return
 
-        for link in links:
+        for link in links_validos_mensagem:
             music_queue.append({"title": None, "url": link})
 
-        await ctx.send(f"{len(links)} músicas adicionadas à fila! Use `!tocar` para começar a reprodução.")
-        await resposta.delete()
+        await ctx.send(f"{len(links_validos_mensagem)} músicas adicionadas à fila! Use `!tocar` para começar a reprodução.")
     except asyncio.TimeoutError:
         await ctx.send("Tempo esgotado! Por favor, tente novamente.")
 
@@ -386,27 +389,25 @@ async def fila(ctx):
             fila_formatada += f"**{i}.** {item['title']}\n"
         
         await ctx.send(f"🎵 Tem **{len(music_queue)}** músicas na fila.")
-        await ctx.message.delete()
 
 @bot.command()
 async def proximo(ctx):
     if ctx.voice_client and ctx.voice_client.is_playing():
         ctx.voice_client.stop()
-        await ctx.send("Música pulada! Tocando a próxima...")
         if len(music_queue) > 0:
             next_data = music_queue.popleft()
             await tocar_musica(ctx, next_data["url"], next_data["title"])
         else:
             await ctx.send("A fila de músicas acabou.")
+        await ctx.send("Música pulada! Tocando a próxima...")
+        ''
     elif ctx.voice_client:
         await ctx.send("Não há nenhuma música tocando no momento.")
     else:
         await ctx.send("Não estou conectado a nenhum canal de voz.")
-    await ctx.message.delete()
 
 @bot.command()
 async def pausar(ctx):
-    await ctx.message.delete()
     if ctx.voice_client and ctx.voice_client.is_playing():
         ctx.voice_client.pause()  # Pausa a música atual
         await ctx.send("A música foi pausada. Use `!retomar` para continuar.")
@@ -424,7 +425,6 @@ async def retomar(ctx):
         await ctx.send("A música não está pausada no momento.")
     else:
         await ctx.send("Não estou conectado a nenhum canal de voz.")
-    await ctx.message.delete()
 
 @bot.command()
 async def parar(ctx):
@@ -436,7 +436,6 @@ async def parar(ctx):
         await ctx.send("Não há nenhuma música tocando no momento.")
     else:
         await ctx.send("Não estou conectado a nenhum canal de voz.")
-    await ctx.message.delete()
 
 @bot.command()
 async def sair(ctx):
@@ -445,7 +444,6 @@ async def sair(ctx):
         await ctx.send("Saí do canal de voz!")
     else:
         await ctx.send("Não estou em nenhum canal de voz no momento.")
-    await ctx.message.delete()
 
 
 
@@ -723,6 +721,7 @@ async def ajuda_slash(interaction: discord.Interaction):
     embed.add_field(name="🎵 Música", value=(
         "`!tocar <URL>` - Adiciona uma música à fila e toca no canal de voz.\n"
         "`!fila` - Mostra a fila de músicas.\n"
+        "`!addfila` - Adiciona uma música na fila.\n"
         "`!proximo` - Pula a música atual e toca a próxima da fila.\n"
         "`!pausar` - Pausa a música atual.\n"
         "`!retomar` - Retoma a música pausada.\n"
@@ -755,7 +754,6 @@ async def ajuda_slash(interaction: discord.Interaction):
 
 # INICIAÇÃO DO BOT
 print('Comandos carregados com sucesso!\n\nIniciando o bot...')
-
 @bot.event
 async def on_ready():
     print(f'{bot.user.name} está Online!\nID do bot: {bot.user.id}\n------------------------------')
@@ -764,5 +762,9 @@ async def on_ready():
         print(f"Comandos de aplicativo sincronizados: {len(synced)}")
     except Exception as e:
         print(f"Erro ao sincronizar comandos de aplicativo: {e}")
+
+    version = "v1.6.21"
+    aviso = bot.get_channel(726114472833581086)
+    await aviso.send(f'Commit versão {version} foi feito.')
 
 bot.run(Token)
