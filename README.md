@@ -1,4 +1,4 @@
-Protofox é um bot feito em python para ser útil e divertido, com vários comando de musica, interação, e informação você pode consultar esses comandos no final do código-fonte, ou com !ajuda no discord
+Protofox é um bot feito em python para ser útil e divertido, com vários comando de musica, interação, e informação você pode consultar esses comandos no final do código-fonte, ou com /ajuda no discord
 
 Ele conversa com os usuários no chat do discord caso seja mencionado usando a IA gemini do Google Ele aceita links de videos do Youtube e músicas do SoundCloud com FFmpeg e yt-dlp Ele tem a personalidade própria, e demonstra isso
 
