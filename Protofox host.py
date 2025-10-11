@@ -23,15 +23,16 @@ import json
 import os
 import re
 
-# PREPARAÇÃO DAS LIBS DO DISCORD
 print('\nBibliotecas carregadas.')
 
+# PREPARAÇÃO DAS LIBS DO DISCORD
 intents = discord.Intents.default()
 intents.message_content = True 
 intents.guilds = True
 intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
+
 print('Intents carregados.')
 
 
@@ -53,18 +54,21 @@ ytdl_format_options = {
     "noplaylist": False,
     "quiet": True,
     "default_search": "auto",
-    "source_address": "0.0.0.0"
+    "source_address": "0.0.0.0",
+    "http_headers": {
+        "User-Agent": "Mozilla/5.0"
+    }
 }
 
 ytdl = youtube_dl.YoutubeDL(ytdl_format_options)
-print('Youtube DL carregado.')
+print('ytdl format carregado.')
 
 
 
 
 # CARREGAMENTO DOS DADOS DO USUÁRIO E PREPARAÇÃO DA IA
 genai.configure(api_key=gemini_key)
-print('API gemini-2.0-flash ativo.')
+print('API gemini-2.5-flash ativo.')
 
 caracteristicas_bot = (
     "Sua memória (só falar se for perguntado sobre seu nome, time, cultura, quem te criou ou no que seu sistema é baseado):"
@@ -145,6 +149,7 @@ async def historico(channel, usuario, bot_user):
     historico_geral.append(historico_usuario)
     return "\n\n".join(historico_usuario)
 
+print('Dados da IA carregados.')
 
 
 
@@ -153,7 +158,7 @@ async def historico(channel, usuario, bot_user):
 # Função para gerar resposta usando a API gemini do google (é de grátis)
 async def gerar_resposta_gemini(mensagem, user_id):
     try:
-        model = genai.GenerativeModel('models/gemini-2.0-flash')
+        model = genai.GenerativeModel('models/gemini-2.5-flash')
         historico = conversas_usuarios.get(str(user_id), [])
         prompt = (
             caracteristicas_bot + "\n" +
@@ -167,15 +172,33 @@ async def gerar_resposta_gemini(mensagem, user_id):
             lambda: model.generate_content(
                 prompt,
                 generation_config=genai.types.GenerationConfig(
-                    max_output_tokens=400
+                    max_output_tokens=800
                 )
             )
         )
         texto = response.text.strip()
-        return texto[:2000]
+        return texto
     except Exception as e:
         print(f"Erro na API Gemini: {e}")
         return "Não consegui gerar uma resposta. Aguarde alguns segundos e tente novamente."
+
+async def divide_mensagem(channel, texto, reference=None):
+    partes = []
+    paragrafo_atual = ""
+
+    for paragrafo in texto.split("\n"):
+        if len(paragrafo_atual) + len(paragrafo) + 1 <= 2000:
+            paragrafo_atual += paragrafo + "\n"
+        else:
+            partes.append(paragrafo_atual.strip())
+            paragrafo_atual = paragrafo + "\n"
+
+    if paragrafo_atual:
+        partes.append(paragrafo_atual.strip())
+
+    for i, parte in enumerate(partes):
+        await channel.send(parte, reference=reference if i == 0 else None)
+
 
 
 
@@ -186,6 +209,14 @@ async def verificar_inatividade(ctx, tempo_espera=180):
     if ctx.voice_client and not ctx.voice_client.is_playing() and not ctx.voice_client.is_paused():
         await ctx.voice_client.disconnect()
         await ctx.send("Saí do canal de voz por inatividade.")
+
+async def proxima_musica(ctx):
+    if len(music_queue) > 0:
+        next_data = music_queue.popleft()
+        await tocar_musica(ctx, next_data["url"], next_data.get("title"))
+    else:
+        await ctx.send("A fila de músicas acabou.")
+        await verificar_inatividade(ctx)
 
 async def tocar_musica(ctx, url, title=None):
     if not title or not url or title == "None":
@@ -209,12 +240,8 @@ async def tocar_musica(ctx, url, title=None):
             print(f"Erro durante a reprodução: {error}")
         else:
             print("Música terminou normalmente.")
-        if len(music_queue) > 0:
-            next_data = music_queue.popleft()
-            # Chama tocar_musica com o próximo item (busca título se necessário)
-            bot.loop.create_task(tocar_musica(ctx, next_data["url"], next_data.get("title")))
-        else:
-            bot.loop.create_task(verificar_inatividade(ctx))
+        bot.loop.create_task(proxima_musica(ctx))
+
 
     ctx.voice_client.play(audio_source, after=after_playing)
     await ctx.send(f"Tocando agora: **{title}**")
@@ -244,7 +271,8 @@ async def on_message(message):
 
             'oii': '👋','olá': '👋',"engraçado": "😂",'sus': '🤨','legal': '👍',"foda": "😎","amor": "❤️","feliz": "😊",    "triste": "😢",
             "raiva": "😡","surpresa": "😲","medo": "😱","confuso": "😕", "cansado": "😴","animado": "🤔","pensativo": "🤔","desculpa": "🙏",
-            'sim': '👍','atumalaca': '😂','música': '🎵','!tocar': '🎶','!parar': '⏹️','!pausar': '⏸️','!retomar': '▶️','!sair': '🚪'
+            'sim': '👍','atumalaca': '😂','música': '🎵','!tocar': '🎶','!parar': '⏹️','!pausar': '⏸️','!retomar': '▶️','!sair': '🚪', 
+            '!addfila': '📝', '!fila': '📃', '!piada': '🤣', '!dado': '🎲', '!analisar': '🔎', '!provocar': '🤡', 'protofox': '🤖', '!proximo': '⏭️'
         }
 
         # Verificar se a mensagem contém alguma palavra-chave
@@ -259,7 +287,7 @@ async def on_message(message):
                 resposta = await gerar_resposta_gemini(mensagem, message.author.id)
                 await asyncio.sleep(randint(3, 6))
                 await atualizar_historico(message.author.id, mensagem, resposta)
-                await message.channel.send(resposta, reference=message)
+                await divide_mensagem(message.channel, resposta, reference=message)
             except Exception as e:
                 await message.channel.send("Desculpe, ocorreu um erro ao processar a mensagem.")
                 print(f"Erro: {e}")
@@ -275,7 +303,7 @@ async def tocar(ctx, url: str = None):
     if url is None:
         # Se não passar URL, tenta tocar o próximo da fila
         if not music_queue:
-            await ctx.send("A fila está vazia. Adicione músicas com `!tocar <URL>` ou `!criarfila`.")
+            await ctx.send("A fila está vazia. Adicione músicas com `!tocar <URL>` ou `!addfila`.")
             return
         next_data = music_queue.popleft()
         url = next_data.get("url")
@@ -307,7 +335,7 @@ async def tocar(ctx, url: str = None):
             print(f"Erro ao buscar a música: {e}")
             return
 
-    # Se o título ainda não foi buscado (caso de criarfila), busca agora
+    # Se o título ainda não foi buscado (caso de addfila), busca agora
     if not title or not url:
         if not url:
             await ctx.send("O link da música está vazio ou inválido.")
@@ -375,7 +403,7 @@ async def addfila(ctx, *links):
 @bot.command()
 async def fila(ctx):
     if len(music_queue) == 0:
-        await ctx.send("A fila está vazia no momento... Você pode adicionar músicas com `!tocar <URL>`")
+        await ctx.send("A fila está vazia no momento... Você pode adicionar músicas com `!addfila <URL>`")
     else:
         fila_formatada = ""
         for i, item in enumerate(music_queue, start=1):
@@ -386,14 +414,8 @@ async def fila(ctx):
 @bot.command()
 async def proximo(ctx):
     if ctx.voice_client and ctx.voice_client.is_playing():
-        ctx.voice_client.stop()  # Interrompe a música atual
-        if len(music_queue) > 0:
-            next_data = music_queue.popleft()
-            await ctx.send("Música pulada! Tocando a próxima...")
-            await tocar_musica(ctx, next_data["url"], next_data["title"])
-        else:
-            await ctx.send("Música pulada! Tocando a próxima...")
-            await ctx.send("A fila de músicas acabou.")
+        ctx.voice_client.stop()
+        await ctx.send("Música pulada! Tocando a próxima...")
     elif ctx.voice_client:
         await ctx.send("Não há nenhuma música tocando no momento.")
     else:
@@ -578,9 +600,9 @@ async def provoque(ctx, member: discord.Member = None):
     await ctx.send(f"{member.mention}, {mensagem}")
 
 @bot.command()
-async def analisar(ctx):
+async def analisar(ctx, *, prompt: str = None):
     if not ctx.message.attachments:
-        await ctx.send("Por favor, envie uma imagem junto com o comando `!analizar`.")
+        await ctx.send("Por favor, envie uma imagem junto com o comando `!analisar`.")
         return
 
     imagem = ctx.message.attachments[0]
@@ -597,7 +619,12 @@ async def analisar(ctx):
     img_bytes = await imagem.read()
 
     try:
-        model = genai.GenerativeModel('models/gemini-1.5-flash-latest')  # Troque pelo modelo vision disponível
+        model = genai.GenerativeModel("models/gemini-2.0-flash")  # Troque pelo modelo disponível
+        
+        # Define o prompt padrão caso o usuário não forneça um
+        if prompt is None:
+            prompt = "O que você acha dessa imagem?"
+        
         response = model.generate_content(
             [
                 {
@@ -609,7 +636,7 @@ async def analisar(ctx):
                             }
                         },
                         {
-                            "text": "O que você acha dessa imagem?"
+                            "text": prompt
                         }
                     ]
                 }
@@ -618,12 +645,22 @@ async def analisar(ctx):
                 max_output_tokens=400
             )
         )
-        texto = response.text.strip()
-        await ctx.send(texto[:2000])
+        
+        if response.candidates and response.candidates[0].content.parts:
+            texto = response.text.strip()
+            await ctx.send(texto[:2000])
+        else:
+            Exception
+            
     except Exception as e:
         await ctx.send("Não consegui analisar a imagem. Tente novamente.")
         print(f"Erro na análise de imagem: {e}")
 
+
+@bot.tree.command(name="souprotofox", description="Repete a mensagem que você enviar.")
+async def souprotofox(interaction: discord.Interaction, fala: str):
+    await interaction.response.send_message(fala, ephemeral=True)
+    await interaction.channel.send(fala)
 
 
 
@@ -723,12 +760,13 @@ async def ajuda_slash(interaction: discord.Interaction):
     ), inline=False)
     embed.add_field(name="🎉 Diversão", value=(
         "`/reacts <True/False>` - Habilita/Desabilita as reações do Bot nas mensagens do servidor.\n"
+        "`/souprotofox <mensagem>` - Repete a mensagem que você enviar.\n"
         "`!provoque <usuário>` - Envia uma provocação engraçada para o usuário mencionado.\n"
         "`!dog` - Envia uma imagem aleatória de cachorro.\n"
         "`!catfact` - Envia um fato aleatório sobre gatos.\n"
         "`!piada` - Envia uma piada aleatória.\n"
         "`!dado` - Rola o dado que quiser e quantas vezes quiser.\n"
-        "`!analisar` - Analiza uma imagem enviada e diz o que acha dela."
+        "`!analisar` - Analisa uma imagem enviada em conjunto com sua mensagem.\n"
     ), inline=False)
     embed.add_field(name="ℹ️ Informações", value=(
         "`/calc` - Calcula uma expressão matemática simples. Exemplo: 2*2+(3).\n"
@@ -742,11 +780,11 @@ async def ajuda_slash(interaction: discord.Interaction):
     embed.set_footer(text="Bot de Música e Diversão • Desenvolvido com ❤️")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
+print('Comandos carregados com sucesso!\n\nIniciando o bot...')
 
 
 
 # INICIAÇÃO DO BOT
-print('Comandos carregados com sucesso!\n\nIniciando o bot...')
 @bot.event
 async def on_ready():
     print(f'{bot.user.name} está Online!\nID do bot: {bot.user.id}\n------------------------------')
