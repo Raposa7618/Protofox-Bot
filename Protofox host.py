@@ -81,6 +81,7 @@ comportamento_bot = (
     "Você geralmente utiliza linguagem furry, ('OwO', 'UwU', 'awoo', 'hihi') mas não de forma restritiva."
 )
 
+
 historico_geral = list()
 historico_usuario = list()
 
@@ -218,7 +219,10 @@ async def proxima_musica(ctx):
         await ctx.send("A fila de músicas acabou.")
         await verificar_inatividade(ctx)
 
+looping = {'enabled': False, 'current_song': None}
+
 async def tocar_musica(ctx, url, title=None):
+    global looping
     if not title or not url or title == "None":
         loop = asyncio.get_event_loop()
         try:
@@ -238,13 +242,16 @@ async def tocar_musica(ctx, url, title=None):
     def after_playing(error):
         if error:
             print(f"Erro durante a reprodução: {error}")
+        elif looping["enabled"] and looping["current_song"]:
+            bot.loop.create_task(tocar_musica(ctx, looping["current_song"]["url"], looping["current_song"]["title"]))
         else:
-            print("Música terminou normalmente.")
-        bot.loop.create_task(proxima_musica(ctx))
-
+            bot.loop.create_task(proxima_musica(ctx))
 
     ctx.voice_client.play(audio_source, after=after_playing)
     await ctx.send(f"Tocando agora: **{title}**")
+
+    if looping["enabled"]:
+        looping["current_song"] = {"url": url, "title": title}
 
 
 
@@ -256,13 +263,12 @@ async def on_message(message):
         return
     
     guild_id = str(message.guild.id) if message.guild else None
-    # Por padrão, reações habilitadas se não houver configuração
-    reacts_enabled = True
+    reacts_enabled = True # Por padrão, reações habilitadas se não houver configuração
     if guild_id and guild_id in configs_servidores:
         reacts_enabled = configs_servidores[guild_id].get("reacts", True)
 
 
-    if reacts_enabled:
+    if reacts_enabled: 
         palavras_chave = {
             "gato": "😺","cachorro": "🐶",'raposa': '🦊',"urso": "🐻","lobo": "🐺",'peixe': '🐟','sapo': '🐸','pato': '🦆',
             'coelho': '🐰','panda': '🐼','onça': '🐱','trigue': '🐯',
@@ -353,7 +359,7 @@ async def tocar(ctx, url: str = None):
             print(f"Erro ao buscar a música da fila: {e}")
             return
 
-    # Conecta no canal de voz se necessário
+    # Conecta no canal de voz se necessario
     if ctx.author.voice:
         channel = ctx.author.voice.channel
         if ctx.voice_client is None:
@@ -410,6 +416,28 @@ async def fila(ctx):
             fila_formatada += f"**{i}.** {item['title']}\n"
         
         await ctx.send(f"🎵 Tem **{len(music_queue)}** músicas na fila.")
+
+@bot.command()
+async def loop(ctx):
+    global looping
+    if not ctx.voice_client or not ctx.voice_client.is_playing():
+        await ctx.send("Não há nenhuma música tocando para ativar o loop.")
+        return
+
+    looping["enabled"] = True
+    await ctx.send("Loop ativado! A música atual será repetida indefinidamente.")
+    looping["current_song"] = {"url": ctx.current_audio.source, "title": "Música em loop"}
+
+@bot.command()
+async def continuar(ctx):
+    global looping
+    if not looping["enabled"]:
+        await ctx.send("O loop não está ativado.")
+        return
+
+    looping["enabled"] = False
+    looping["current_song"] = None
+    await ctx.send("Loop desativado! A fila de músicas será retomada.")
 
 @bot.command()
 async def proximo(ctx):
@@ -752,6 +780,8 @@ async def ajuda_slash(interaction: discord.Interaction):
         "`!tocar <URL>` - Adiciona uma música à fila e toca no canal de voz.\n"
         "`!fila` - Mostra a fila de músicas.\n"
         "`!addfila` - Adiciona uma música na fila.\n"
+        "`!loop` - Faz a música atual tocar em looping.\n"
+        "`!continuar` - Para o looping e continua a fila.\n"
         "`!proximo` - Pula a música atual e toca a próxima da fila.\n"
         "`!pausar` - Pausa a música atual.\n"
         "`!retomar` - Retoma a música pausada.\n"
@@ -784,15 +814,16 @@ print('Comandos carregados com sucesso!\n\nIniciando o bot...')
 
 
 
+
 # INICIAÇÃO DO BOT
 @bot.event
 async def on_ready():
-    print(f'{bot.user.name} está Online!\nID do bot: {bot.user.id}\n------------------------------')
+    print(f'{bot.user.name} está Online!\nID do bot: {bot.user.id}')
     try:
         synced = await bot.tree.sync()
-        print(f"Comandos de aplicativo sincronizados: {len(synced)}")
+        print(f"Comandos de aplicativo sincronizados: {len(synced)}\n------------------------------")
     except Exception as e:
-        print(f"Erro ao sincronizar comandos de aplicativo: {e}")
+        print(f"Erro ao sincronizar comandos de aplicativo: {e}\n------------------------------")
 
 #    version = "teste de hosting"
 #    aviso = bot.get_channel(726114472833581086)
