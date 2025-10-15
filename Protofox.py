@@ -10,7 +10,6 @@ from discord.ext import commands
 
 from Key import Token, gemini_key
 import google.generativeai as genai
-from keep_alive import run, keep_alive
 
 from collections import deque
 import yt_dlp as youtube_dl
@@ -24,17 +23,16 @@ import json
 import os
 import re
 
-keep_alive()
-
-# PREPARAÇÃO DAS LIBS DO DISCORD
 print('\nBibliotecas carregadas.')
 
+# PREPARAÇÃO DAS LIBS DO DISCORD
 intents = discord.Intents.default()
 intents.message_content = True 
 intents.guilds = True
 intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
+
 print('Intents carregados.')
 
 
@@ -42,6 +40,7 @@ print('Intents carregados.')
 
 # INICIALIZAÇÃO DO YOUTUBE DL PARA AS MÚSICAS
 music_queue = deque()
+guild_states = {}
 
 # Caminho completo para o executável do FFmpeg
 ffmpeg_options = {
@@ -53,22 +52,24 @@ ffmpeg_options = {
 # visitor_data = CgtVLU1aZW1kZm1xSSi1893BBjIKCgJCUhIEGgAgKg%3D%3D
 ytdl_format_options = {
     "format": "bestaudio/best",
-    "noplaylist": True,
+    "noplaylist": False,
     "quiet": True,
     "default_search": "auto",
     "source_address": "0.0.0.0",
-    "cookiefile": "cookies.txt"
+    "http_headers": {
+        "User-Agent": "Mozilla/5.0"
+    }
 }
 
 ytdl = youtube_dl.YoutubeDL(ytdl_format_options)
-print('Youtube DL carregado.')
+print('ytdl format carregado.')
 
 
 
 
 # CARREGAMENTO DOS DADOS DO USUÁRIO E PREPARAÇÃO DA IA
 genai.configure(api_key=gemini_key)
-print('API gemini-2.0-flash ativo.')
+print('API gemini-2.5-flash ativo.')
 
 caracteristicas_bot = (
     "Sua memória (só falar se for perguntado sobre seu nome, time, cultura, quem te criou ou no que seu sistema é baseado):"
@@ -80,6 +81,7 @@ comportamento_bot = (
     "Você não é uma IA, mas sim um amigo virtual; Você é um furry híbrido protogen-raposa;"
     "Você geralmente utiliza linguagem furry, ('OwO', 'UwU', 'awoo', 'hihi') mas não de forma restritiva."
 )
+
 
 historico_geral = list()
 historico_usuario = list()
@@ -149,6 +151,7 @@ async def historico(channel, usuario, bot_user):
     historico_geral.append(historico_usuario)
     return "\n\n".join(historico_usuario)
 
+print('Dados da IA carregados.')
 
 
 
@@ -157,7 +160,7 @@ async def historico(channel, usuario, bot_user):
 # Função para gerar resposta usando a API gemini do google (é de grátis)
 async def gerar_resposta_gemini(mensagem, user_id):
     try:
-        model = genai.GenerativeModel('models/gemini-2.0-flash')
+        model = genai.GenerativeModel('models/gemini-2.5-flash')
         historico = conversas_usuarios.get(str(user_id), [])
         prompt = (
             caracteristicas_bot + "\n" +
@@ -171,27 +174,79 @@ async def gerar_resposta_gemini(mensagem, user_id):
             lambda: model.generate_content(
                 prompt,
                 generation_config=genai.types.GenerationConfig(
-                    max_output_tokens=400
+                    max_output_tokens=800
                 )
             )
         )
         texto = response.text.strip()
-        return texto[:2000]
+        return texto
     except Exception as e:
         print(f"Erro na API Gemini: {e}")
         return "Não consegui gerar uma resposta. Aguarde alguns segundos e tente novamente."
+
+async def divide_mensagem(channel, texto, reference=None):
+    partes = []
+    paragrafo_atual = ""
+
+    for paragrafo in texto.split("\n"):
+        if len(paragrafo_atual) + len(paragrafo) + 1 <= 2000:
+            paragrafo_atual += paragrafo + "\n"
+        else:
+            partes.append(paragrafo_atual.strip())
+            paragrafo_atual = paragrafo + "\n"
+
+    if paragrafo_atual:
+        partes.append(paragrafo_atual.strip())
+
+    for i, parte in enumerate(partes):
+        await channel.send(parte, reference=reference if i == 0 else None)
+
 
 
 
 
 # AÇÕES PASSIVAS E ATIVAS DO BOT
+def verificar_mesma_call(ctx):
+    if not ctx.author.voice: # Verifica se o usuário está na mesma call que o bot.
+        return False, "Você precisa estar na minha call para usar este comando."
+    if not ctx.voice_client:
+        return False, "Eu não estou conectado a nenhuma call"
+    if ctx.author.voice.channel != ctx.voice_client.channel:
+        return False, "Nós precisamos estarmos na mesma call para usar este comando."
+    return True, None
+
 async def verificar_inatividade(ctx, tempo_espera=180):
     await asyncio.sleep(tempo_espera)
     if ctx.voice_client and not ctx.voice_client.is_playing() and not ctx.voice_client.is_paused():
         await ctx.voice_client.disconnect()
-        await ctx.send("Saí do canal de voz por inatividade.")
+        await ctx.send("Saí da call por inatividade.")
+
+def get_guild_state(guild_id):
+    """Retorna o estado do servidor, criando um novo se necessário."""
+    if guild_id not in guild_states:
+        guild_states[guild_id] = {
+            "music_queue": deque(),
+            "looping": {"enabled": False, "current_song": None}
+        }
+    return guild_states[guild_id]
+
+async def proxima_musica(ctx):
+    guild_id = ctx.guild.id
+    guild_state = get_guild_state(guild_id)
+    music_queue = guild_state["music_queue"]
+
+    if len(music_queue) > 0:
+        next_data = music_queue.popleft()
+        await tocar_musica(ctx, next_data["url"], next_data.get("title"))
+    else:
+        await ctx.send("A fila de músicas acabou.")
+        await verificar_inatividade(ctx)
 
 async def tocar_musica(ctx, url, title=None):
+    guild_id = ctx.guild.id
+    guild_state = get_guild_state(guild_id)
+    looping = guild_state["looping"]
+
     if not title or not url or title == "None":
         loop = asyncio.get_event_loop()
         try:
@@ -211,17 +266,20 @@ async def tocar_musica(ctx, url, title=None):
     def after_playing(error):
         if error:
             print(f"Erro durante a reprodução: {error}")
+        elif looping["enabled"] and looping["current_song"]:
+            bot.loop.create_task(tocar_musica(ctx, looping["current_song"]["url"], looping["current_song"]["title"]))
         else:
-            print("Música terminou normalmente.")
-        if len(music_queue) > 0:
-            next_data = music_queue.popleft()
-            # Chama tocar_musica com o próximo item (busca título se necessário)
-            bot.loop.create_task(tocar_musica(ctx, next_data["url"], next_data.get("title")))
-        else:
-            bot.loop.create_task(verificar_inatividade(ctx))
+            bot.loop.create_task(proxima_musica(ctx))
 
-    ctx.voice_client.play(audio_source, after=after_playing)
-    await ctx.send(f"Tocando agora: **{title}**")
+    # Verifica se já está tocando algo antes de iniciar
+    if not ctx.voice_client.is_playing():
+        ctx.voice_client.play(audio_source, after=after_playing)
+        await ctx.send(f"Tocando agora: **{title}**")
+
+        # Atualiza o estado do loop com a música atual
+        if looping["enabled"]:
+            looping["current_song"] = {"url": url, "title": title}
+            
 
 
 
@@ -232,13 +290,12 @@ async def on_message(message):
         return
     
     guild_id = str(message.guild.id) if message.guild else None
-    # Por padrão, reações habilitadas se não houver configuração
-    reacts_enabled = True
+    reacts_enabled = True # Por padrão, reações habilitadas se não houver configuração
     if guild_id and guild_id in configs_servidores:
         reacts_enabled = configs_servidores[guild_id].get("reacts", True)
 
 
-    if reacts_enabled:
+    if reacts_enabled: 
         palavras_chave = {
             "gato": "😺","cachorro": "🐶",'raposa': '🦊',"urso": "🐻","lobo": "🐺",'peixe': '🐟','sapo': '🐸','pato': '🦆',
             'coelho': '🐰','panda': '🐼','onça': '🐱','trigue': '🐯',
@@ -247,7 +304,8 @@ async def on_message(message):
 
             'oii': '👋','olá': '👋',"engraçado": "😂",'sus': '🤨','legal': '👍',"foda": "😎","amor": "❤️","feliz": "😊",    "triste": "😢",
             "raiva": "😡","surpresa": "😲","medo": "😱","confuso": "😕", "cansado": "😴","animado": "🤔","pensativo": "🤔","desculpa": "🙏",
-            'sim': '👍','atumalaca': '😂','música': '🎵','!tocar': '🎶','!parar': '⏹️','!pausar': '⏸️','!retomar': '▶️','!sair': '🚪'
+            'sim': '👍','atumalaca': '😂','música': '🎵','!tocar': '🎶','!parar': '⏹️','!pausar': '⏸️','!retomar': '▶️','!sair': '🚪', 
+            '!addfila': '📝', '!fila': '📃', '!piada': '🤣', '!dado': '🎲', '!analisar': '🔎', '!provocar': '🤡', 'protofox': '🤖', '!proximo': '⏭️'
         }
 
         # Verificar se a mensagem contém alguma palavra-chave
@@ -262,7 +320,7 @@ async def on_message(message):
                 resposta = await gerar_resposta_gemini(mensagem, message.author.id)
                 await asyncio.sleep(randint(3, 6))
                 await atualizar_historico(message.author.id, mensagem, resposta)
-                await message.channel.send(resposta, reference=message)
+                await divide_mensagem(message.channel, resposta, reference=message)
             except Exception as e:
                 await message.channel.send("Desculpe, ocorreu um erro ao processar a mensagem.")
                 print(f"Erro: {e}")
@@ -275,10 +333,20 @@ async def on_message(message):
 # COMANDOS PARA MUSICAS
 @bot.command()
 async def tocar(ctx, url: str = None):
+    # Verifica se o usuário está em um canal de voz
+    if not ctx.author.voice:
+        await ctx.send("Você precisa estar na minha call para usar este comando.")
+        return
+
+    # Verifica se o bot está conectado a um canal de voz
+    if ctx.voice_client and ctx.voice_client.channel != ctx.author.voice.channel:
+        await ctx.send("Você precisa estar no mesmo canal de voz que eu para usar este comando.")
+        return
+
     if url is None:
         # Se não passar URL, tenta tocar o próximo da fila
         if not music_queue:
-            await ctx.send("A fila está vazia. Adicione músicas com `!tocar <URL>` ou `!criarfila`.")
+            await ctx.send("A fila está vazia. Adicione músicas com `!tocar <URL>` ou `!addfila`.")
             return
         next_data = music_queue.popleft()
         url = next_data.get("url")
@@ -310,24 +378,6 @@ async def tocar(ctx, url: str = None):
             print(f"Erro ao buscar a música: {e}")
             return
 
-    # Se o título ainda não foi buscado (caso de criarfila), busca agora
-    if not title or not url:
-        if not url:
-            await ctx.send("O link da música está vazio ou inválido.")
-            return
-        loop = asyncio.get_event_loop()
-        try:
-            data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=False))
-            url = data.get('url')
-            if not url:
-                await ctx.send("Não foi possível extrair o áudio desse link.")
-                return
-            title = data.get('title', 'Música')
-        except Exception as e:
-            await ctx.send("Ocorreu um erro ao obter a música da fila. Tente novamente.")
-            print(f"Erro ao buscar a música da fila: {e}")
-            return
-
     # Conecta no canal de voz se necessário
     if ctx.author.voice:
         channel = ctx.author.voice.channel
@@ -335,11 +385,18 @@ async def tocar(ctx, url: str = None):
             await channel.connect()
             await ctx.send(f"Entrei no canal de voz: {channel.name}")
         await tocar_musica(ctx, url, title)
-    else:
-        await ctx.send("Você precisa estar em um canal de voz para usar este comando.")
-        
+
 @bot.command()
 async def addfila(ctx, *links):
+    permitido, mensagem = verificar_mesma_call(ctx)
+    if not permitido:
+        await ctx.send(mensagem)
+        return
+
+    guild_id = ctx.guild.id
+    guild_state = get_guild_state(guild_id)
+    music_queue = guild_state["music_queue"]
+
     links_validos_comando = [
         l for l in links if (
             "youtube.com/" in l or "youtu.be/" in l or "soundcloud.com/" in l
@@ -350,10 +407,8 @@ async def addfila(ctx, *links):
         for link in links_validos_comando:
             music_queue.append({"title": None, "url": link})
         await ctx.send(f"{len(links_validos_comando)} músicas adicionadas à fila!")
-        # Se links foram passados no comando, não precisa pedir mais por mensagem
         return
 
-    # Se nenhum link foi passado no comando, então pede para enviar por mensagem
     await ctx.send("Envie os links do YouTube ou SoundCloud (um por linha ou separados por espaço). Você tem 15 segundos para responder.")
 
     def check(m):
@@ -362,10 +417,8 @@ async def addfila(ctx, *links):
     try:
         resposta = await bot.wait_for('message', timeout=15.0, check=check)
         links_validos_mensagem = []
-        # Importante: A sua lógica de validação aqui só verifica links do YouTube.
-        # Se você quiser SoundCloud também, precisa adicionar a verificação.
         for parte in resposta.content.replace('\n', ' ').split():
-            if "youtube.com/" in parte or "youtu.be/" in parte or "soundcloud.com/" in parte: # Adicionado SoundCloud
+            if "youtube.com/" in parte or "youtu.be/" in parte or "soundcloud.com/" in parte:
                 links_validos_mensagem.append(parte)
 
         if not links_validos_mensagem:
@@ -381,70 +434,151 @@ async def addfila(ctx, *links):
 
 @bot.command()
 async def fila(ctx):
+    permitido, mensagem = verificar_mesma_call(ctx)
+    if not permitido:
+        await ctx.send(mensagem)
+        return
+
+    guild_id = ctx.guild.id
+    guild_state = get_guild_state(guild_id)
+    music_queue = guild_state["music_queue"]
+
     if len(music_queue) == 0:
-        await ctx.send("A fila está vazia no momento... Você pode adicionar músicas com `!tocar <URL>`")
+        await ctx.send("A fila está vazia no momento... Você pode adicionar músicas com `!addfila <URL>`")
     else:
-        fila_formatada = ""
-        for i, item in enumerate(music_queue, start=1):
-            fila_formatada += f"**{i}.** {item['title']}\n"
-        
-        await ctx.send(f"🎵 Tem **{len(music_queue)}** músicas na fila.")
+        fila_formatada = "\n".join([f"**{i+1}.** {item['title'] or 'Música sem título'}" for i, item in enumerate(music_queue)])
+        await ctx.send(f"🎵 Tem **{len(music_queue)}** músicas na fila:\n{fila_formatada}")
+
+@bot.command()
+async def loop(ctx):
+    permitido, mensagem = verificar_mesma_call(ctx)
+    if not permitido:
+        await ctx.send(mensagem)
+        return
+
+    guild_id = ctx.guild.id
+    guild_state = get_guild_state(guild_id)
+    looping = guild_state["looping"]
+
+    # Verifica se o bot está tocando ou pausado
+    if not ctx.voice_client or (not ctx.voice_client.is_playing() and not ctx.voice_client.is_paused()):
+        await ctx.send("Não há nenhuma música tocando para ativar o loop.")
+        return
+
+    # Alterna o estado de loop
+    looping["enabled"] = not looping["enabled"]
+
+    if looping["enabled"]:
+        # Define a música atual como a música a ser repetida
+        if ctx.voice_client.source:
+            looping["current_song"] = {
+                "url": getattr(ctx.voice_client.source, "url", None),
+                "title": getattr(ctx.voice_client.source, "title", "Música atual")
+            }
+        await ctx.send("Loop ativado!.")
+    else:
+        # Desativa o loop e limpa a música atual
+        looping["current_song"] = None
+        await ctx.send("Loop desativado!")
+
+@bot.command()
+async def continuar(ctx):
+    permitido, mensagem = verificar_mesma_call(ctx)
+    if not permitido:
+        await ctx.send(mensagem)
+        return
+    
+    guild_id = ctx.guild.id
+    guild_state = get_guild_state(guild_id)
+    looping = guild_state["looping"]
+
+    if not looping["enabled"]:
+        await ctx.send("O loop não está ativado.")
+        return
+
+    looping["enabled"] = False
+    looping["current_song"] = None
+    await ctx.send("Loop desativado! A fila de músicas será retomada.")
 
 @bot.command()
 async def proximo(ctx):
+    permitido, mensagem = verificar_mesma_call(ctx)
+    if not permitido:
+        await ctx.send(mensagem)
+        return
+    
+    guild_id = ctx.guild.id
+    guild_state = get_guild_state(guild_id)
+    music_queue = guild_state["music_queue"]
+
     if ctx.voice_client and ctx.voice_client.is_playing():
-        ctx.voice_client.stop()
+        ctx.voice_client.stop()  
         if len(music_queue) > 0:
-            next_data = music_queue.popleft()
-            await tocar_musica(ctx, next_data["url"], next_data["title"])
+            next_data = music_queue.popleft() 
+            await tocar_musica(ctx, next_data["url"], next_data.get("title"))
         else:
-            await ctx.send("A fila de músicas acabou.")
-        await ctx.send("Música pulada! Tocando a próxima...")
-        ''
+            await ctx.send("A fila de músicas acabou. Adicione mais músicas com `!addfila` ou `!tocar`.")
     elif ctx.voice_client:
         await ctx.send("Não há nenhuma música tocando no momento.")
     else:
-        await ctx.send("Não estou conectado a nenhum canal de voz.")
+        await ctx.send("Não estou conectado a nenhuma call.")
 
 @bot.command()
 async def pausar(ctx):
+    permitido, mensagem = verificar_mesma_call(ctx)
+    if not permitido:
+        await ctx.send(mensagem)
+        return
+    
     if ctx.voice_client and ctx.voice_client.is_playing():
-        ctx.voice_client.pause()  # Pausa a música atual
+        ctx.voice_client.pause()
         await ctx.send("A música foi pausada. Use `!retomar` para continuar.")
-    elif ctx.voice_client:
-        await ctx.send("Não há nenhuma música tocando no momento.")
     else:
-        await ctx.send("Não estou conectado a nenhum canal de voz.")
+        await ctx.send("Não há nenhuma música tocando no momento.")
 
 @bot.command()
 async def retomar(ctx):
+    permitido, mensagem = verificar_mesma_call(ctx)
+    if not permitido:
+        await ctx.send(mensagem)
+        return
+    
     if ctx.voice_client and ctx.voice_client.is_paused():
-        ctx.voice_client.resume()  # Retoma a música pausada
+        ctx.voice_client.resume()
         await ctx.send("A música foi retomada.")
-    elif ctx.voice_client:
-        await ctx.send("A música não está pausada no momento.")
     else:
-        await ctx.send("Não estou conectado a nenhum canal de voz.")
+        await ctx.send("A música não está pausada no momento.")
 
 @bot.command()
 async def parar(ctx):
+    permitido, mensagem = verificar_mesma_call(ctx)
+    if not permitido:
+        await ctx.send(mensagem)
+        return
+    
+    guild_id = ctx.guild.id
+    guild_state = get_guild_state(guild_id)
+    music_queue = guild_state["music_queue"]
+
     if ctx.voice_client:
-        ctx.voice_client.stop()  # Para a música atual
-        music_queue.clear()  # Limpa a fila de músicas
+        ctx.voice_client.stop()
+        music_queue.clear()
         await ctx.send("A música foi parada e a fila foi limpa!")
-    elif ctx.voice_client:
-        await ctx.send("Não há nenhuma música tocando no momento.")
     else:
-        await ctx.send("Não estou conectado a nenhum canal de voz.")
+        await ctx.send("Não há nenhuma música tocando no momento.")
 
 @bot.command()
 async def sair(ctx):
+    permitido, mensagem = verificar_mesma_call(ctx)
+    if not permitido:
+        await ctx.send(mensagem)
+        return
+    
     if ctx.voice_client:
         await ctx.voice_client.disconnect()
-        await ctx.send("Saí do canal de voz!")
+        await ctx.send("Saí da call!")
     else:
-        await ctx.send("Não estou em nenhum canal de voz no momento.")
-
+        await ctx.send("Não estou em nenhuma call no momento.")
 
 
 
@@ -585,9 +719,9 @@ async def provoque(ctx, member: discord.Member = None):
     await ctx.send(f"{member.mention}, {mensagem}")
 
 @bot.command()
-async def analisar(ctx):
+async def analisar(ctx, *, prompt: str = None):
     if not ctx.message.attachments:
-        await ctx.send("Por favor, envie uma imagem junto com o comando `!analizar`.")
+        await ctx.send("Por favor, envie uma imagem junto com o comando `!analisar`.")
         return
 
     imagem = ctx.message.attachments[0]
@@ -604,7 +738,12 @@ async def analisar(ctx):
     img_bytes = await imagem.read()
 
     try:
-        model = genai.GenerativeModel('models/gemini-1.5-flash-latest')  # Troque pelo modelo vision disponível
+        model = genai.GenerativeModel("models/gemini-2.0-flash")  # Troque pelo modelo disponível
+        
+        # Define o prompt padrão caso o usuário não forneça um
+        if prompt is None:
+            prompt = "O que você acha dessa imagem?"
+        
         response = model.generate_content(
             [
                 {
@@ -616,7 +755,7 @@ async def analisar(ctx):
                             }
                         },
                         {
-                            "text": "O que vc acha dessa imagem?"
+                            "text": prompt
                         }
                     ]
                 }
@@ -625,12 +764,22 @@ async def analisar(ctx):
                 max_output_tokens=400
             )
         )
-        texto = response.text.strip()
-        await ctx.send(texto[:2000])
+        
+        if response.candidates and response.candidates[0].content.parts:
+            texto = response.text.strip()
+            await ctx.send(texto[:2000])
+        else:
+            Exception
+            
     except Exception as e:
         await ctx.send("Não consegui analisar a imagem. Tente novamente.")
         print(f"Erro na análise de imagem: {e}")
 
+
+@bot.tree.command(name="souprotofox", description="Repete a mensagem que você enviar.")
+async def souprotofox(interaction: discord.Interaction, fala: str):
+    await interaction.response.send_message(fala, ephemeral=True)
+    await interaction.channel.send(fala)
 
 
 
@@ -719,23 +868,26 @@ async def ajuda_slash(interaction: discord.Interaction):
         color=discord.Color.blue()
     )
     embed.add_field(name="🎵 Música", value=(
-        "`!tocar <URL>` - Adiciona uma música à fila e toca no canal de voz.\n"
+        "`!tocar <URL>` - Adiciona uma música à fila e toca na call.\n"
         "`!fila` - Mostra a fila de músicas.\n"
         "`!addfila` - Adiciona uma música na fila.\n"
+        "`!loop` - Faz a música atual tocar em looping.\n"
+        "`!continuar` - Para o looping e continua a fila.\n"
         "`!proximo` - Pula a música atual e toca a próxima da fila.\n"
         "`!pausar` - Pausa a música atual.\n"
         "`!retomar` - Retoma a música pausada.\n"
         "`!parar` - Para a música atual e limpa a fila.\n"
-        "`!sair` - Faz o bot sair do canal de voz."
+        "`!sair` - Faz o bot sair da call."
     ), inline=False)
     embed.add_field(name="🎉 Diversão", value=(
         "`/reacts <True/False>` - Habilita/Desabilita as reações do Bot nas mensagens do servidor.\n"
+        "`/souprotofox <mensagem>` - Repete a mensagem que você enviar.\n"
         "`!provoque <usuário>` - Envia uma provocação engraçada para o usuário mencionado.\n"
         "`!dog` - Envia uma imagem aleatória de cachorro.\n"
         "`!catfact` - Envia um fato aleatório sobre gatos.\n"
         "`!piada` - Envia uma piada aleatória.\n"
         "`!dado` - Rola o dado que quiser e quantas vezes quiser.\n"
-        "`!analisar` - Analiza uma imagem enviada e diz o que acha dela."
+        "`!analisar` - Analisa uma imagem enviada em conjunto com sua mensagem.\n"
     ), inline=False)
     embed.add_field(name="ℹ️ Informações", value=(
         "`/calc` - Calcula uma expressão matemática simples. Exemplo: 2*2+(3).\n"
@@ -749,22 +901,23 @@ async def ajuda_slash(interaction: discord.Interaction):
     embed.set_footer(text="Bot de Música e Diversão • Desenvolvido com ❤️")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
+print('Comandos carregados com sucesso!\n\nIniciando o bot...')
+
 
 
 
 # INICIAÇÃO DO BOT
-print('Comandos carregados com sucesso!\n\nIniciando o bot...')
 @bot.event
 async def on_ready():
-    print(f'{bot.user.name} está Online!\nID do bot: {bot.user.id}\n------------------------------')
+    print(f'{bot.user.name} está Online!\nID do bot: {bot.user.id}')
     try:
         synced = await bot.tree.sync()
-        print(f"Comandos de aplicativo sincronizados: {len(synced)}")
+        print(f"Comandos de aplicativo sincronizados: {len(synced)}\n------------------------------")
     except Exception as e:
-        print(f"Erro ao sincronizar comandos de aplicativo: {e}")
+        print(f"Erro ao sincronizar comandos de aplicativo: {e}\n------------------------------")
 
-    version = "v1.6.21"
-    aviso = bot.get_channel(726114472833581086)
-    await aviso.send(f'Commit versão {version} foi feito.')
+#    version = "teste de hosting"
+#    aviso = bot.get_channel(726114472833581086)
+#    await aviso.send(f'Commit versão {version} foi feito.')
 
 bot.run(Token)
