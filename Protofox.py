@@ -335,7 +335,7 @@ async def on_message(message):
 async def tocar(ctx, url: str = None):
     # Verifica se o usuário está em um canal de voz
     if not ctx.author.voice:
-        await ctx.send("Você precisa estar na minha call para usar este comando.")
+        await ctx.send("Você precisa estar em uma call para usar este comando.")
         return
 
     # Verifica se o bot está conectado a um canal de voz
@@ -921,3 +921,4 @@ async def on_ready():
 #    await aviso.send(f'Commit versão {version} foi feito.')
 
 bot.run(Token)
+
