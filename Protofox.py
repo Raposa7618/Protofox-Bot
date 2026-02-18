@@ -8,9 +8,8 @@ from discord import FFmpegOpusAudio
 from discord.ext import commands
 
 from Key import Token, gemini_key, groq_key
-import google.generativeai as genai
+from google import genai
 from groq import Groq
-
 
 from collections import deque
 import yt_dlp as youtube_dl
@@ -69,19 +68,19 @@ print('ytdl format carregado.')
 
 # CARREGAMENTO DOS DADOS DO USUÁRIO E PREPARAÇÃO DA IA
 client = Groq(api_key=groq_key)
-genai.configure(api_key=gemini_key)
+gemini_client = genai.Client(api_key=gemini_key)
 print('API gemini e Groq ativo.')
 
 caracteristicas_bot = (
     "Sua memória (só falar se for perguntado sobre seu nome, time, cultura, quem te criou ou no que seu sistema é baseado):"
     "Você foi criado por Lefox; Você é baseado em linux; Você foi programado em Python; Você é gaúcho."
+    "Utilize a norma portuguesa padrão, ou seja, sem pronome neutro e palavras não oficiais da língua."
 )
 
 comportamento_bot = (
     "Seu comportamento:"
     "Você não é uma IA, mas sim um amigo protogen; Você é um furry híbrido protogen-raposa;"
     "Você geralmente utiliza linguagem furry, ('OwO', 'UwU', 'awoo', 'hihi') mas não de forma restritiva."
-    "Utilize a norma portuguesa padrão, ou seja, sem pronome neutro e palavras não oficiais da língua"
 )
 
 
@@ -233,9 +232,10 @@ async def proxima_musica(ctx):
         await verificar_inatividade(ctx)
 
 looping = {'enabled': False, 'current_song': None}
+current_audio = None
 
 async def tocar_musica(ctx, url, title=None):
-    global looping
+    global looping, current_audio
     if not title or not url or title == "None":
         loop = asyncio.get_event_loop()
         try:
@@ -250,7 +250,7 @@ async def tocar_musica(ctx, url, title=None):
             return
 
     audio_source = FFmpegOpusAudio(url, **ffmpeg_options)
-    ctx.current_audio = audio_source
+    current_audio = {"source": url, "title": title}
 
     def after_playing(error):
         if error:
@@ -270,28 +270,27 @@ async def tocar_musica(ctx, url, title=None):
 
 
 
+# CHAT E CONTEXTO
 @bot.event
 async def on_message(message):
     if message.author == bot.user:
         return
     
     guild_id = str(message.guild.id) if message.guild else None
-    reacts_enabled = True # Por padrão, reações habilitadas se não houver configuração
+    reacts_enabled = True  # Por padrão, reações habilitadas se não houver configuração
     if guild_id and guild_id in configs_servidores:
         reacts_enabled = configs_servidores[guild_id].get("reacts", True)
 
-
     if reacts_enabled: 
         palavras_chave = {
-            "gato": "😺","cachorro": "🐶",'raposa': '🦊',"urso": "🐻","lobo": "🐺",'peixe': '🐟','sapo': '🐸','pato': '🦆',
-            'coelho': '🐰','panda': '🐼','onça': '🐱','trigue': '🐯',
-
-            'servidor': '🖥️','certo': '✅','errado': '❌',"parabéns": "🎉",'pintuda': '🍌',
-
-            'oii': '👋','olá': '👋',"engraçado": "😂",'sus': '🤨','legal': '👍',"foda": "😎","amor": "❤️","feliz": "😊",    "triste": "😢",
-            "raiva": "😡","surpresa": "😲","medo": "😱","confuso": "😕", "cansado": "😴","animado": "🤔","pensativo": "🤔","desculpa": "🙏",
-            'sim': '👍','atumalaca': '😂','música': '🎵','!tocar': '🎶','!parar': '⏹️','!pausar': '⏸️','!retomar': '▶️','!sair': '🚪', 
-            '!addfila': '📝', '!fila': '📃', '!piada': '🤣', '!dado': '🎲', '!analisar': '🔎', '!provocar': '🤡', 'protofox': '🤖', '!proximo': '⏭️'
+            "gato": "😺", "cachorro": "🐶", 'raposa': '🦊', "urso": "🐻", "lobo": "🐺", 'peixe': '🐟', 'sapo': '🐸', 'pato': '🦆',
+            'coelho': '🐰', 'panda': '🐼', 'onça': '🐱', 'trigue': '🐯',
+            'servidor': '🖥️', 'certo': '✅', 'errado': '❌', "parabéns": "🎉", 'pintuda': '🍌',
+            'oii': '👋', 'olá': '👋', "engraçado": "😂", 'sus': '🤨', 'legal': '👍', "foda": "😎", "amor": "❤️", "feliz": "😊",
+            "triste": "😢", "raiva": "😡", "surpresa": "😲", "medo": "😱", "confuso": "😕", "cansado": "😴", "animado": "🤔",
+            "pensativo": "🤔", "desculpa": "🙏", 'sim': '👍', 'atumalaca': '😂', 'música': '🎵', '!tocar': '🎶', '!parar': '⏹️',
+            '!pausar': '⏸️', '!retomar': '▶️', '!sair': '🚪', '!addfila': '📝', '!fila': '📃', '!piada': '🤣', '!dado': '🎲',
+            '!analisar': '🔎', '!provocar': '🤡', 'protofox': '🤖', '!proximo': '⏭️'
         }
 
         # Verificar se a mensagem contém alguma palavra-chave
@@ -300,19 +299,16 @@ async def on_message(message):
                 await message.add_reaction(emoji)
 
     if bot.user.mentioned_in(message):
-        typing_task = message.channel.typing()
-        async with typing_task:
-            try:
-                mensagem = message.content.replace(f"<@{bot.user.id}>", "").strip()
+        try:
+            mensagem = message.content.replace(f"<@{bot.user.id}>", "").strip()
+            async with message.channel.typing():  # Gerenciador de contexto para `typing`
                 resposta = await gerar_resposta_ia(mensagem, message.author.id)
                 await asyncio.sleep(randint(3, 6))
                 await atualizar_historico(message.author.id, mensagem, resposta)
                 await divide_mensagem(message.channel, resposta, reference=message)
-            except Exception as e:
-                await message.channel.send("Desculpe, ocorreu um erro ao processar a mensagem.")
-                print(f"Erro: {e}")
-            finally:
-                typing_task.close()
+        except Exception as e:
+            await message.channel.send("Desculpe, ocorreu um erro ao processar a mensagem.")
+            print(f"Erro: {e}")
 
     await bot.process_commands(message)
 
@@ -325,13 +321,20 @@ async def tocar(ctx, url: str = None):
     if url is None:
         # Se não passar URL, tenta tocar o próximo da fila
         if not music_queue:
-            await ctx.send("A fila está vazia. Adicione músicas com `!tocar <URL>` ou `!addfila`.")
+            await ctx.send("A fila está vazia. Adicione músicas com `!tocar <URL>` ou uma playlist com `!addfila`.")
             return
         next_data = music_queue.popleft()
         url = next_data.get("url")
         title = next_data.get("title")
     else:
-        # Se passar URL, adiciona na fila e já pega o título
+        # Verifica se o link é uma playlist
+        if "playlist?list=" in url or "/sets/" in url or "&list" in url:
+            await ctx.send(
+                "Vi que este é um link de uma playlist. Use o comando `!addfila` para adicioná-la e depois o comando `!tocar` para iniciá-la."
+            )
+            return
+
+        # Se passar a URL, adiciona na fila e já pega o título
         loop = asyncio.get_event_loop()
         try:
             if not url:
@@ -387,73 +390,63 @@ async def tocar(ctx, url: str = None):
 
 @bot.command()
 async def addfila(ctx, *links):
-    links_validos_comando = [
-        l for l in links if (
-            "youtube.com/" in l or "youtu.be/" in l or "soundcloud.com/" in l
-        )
-    ]
-
-    if links_validos_comando:
-        for link in links_validos_comando:
-            music_queue.append({"title": None, "url": link})
-        await ctx.send(f"{len(links_validos_comando)} músicas adicionadas à fila!")
-        return
-
-    await ctx.send("Envie os links do YouTube ou SoundCloud (um por linha ou separados por espaço). Você tem 15 segundos para responder.")
-
-    def check(m):
-        return m.author == ctx.author and m.channel == ctx.channel 
-
-    try:
-        resposta = await bot.wait_for('message', timeout=15.0, check=check)
-        links_validos_mensagem = []
-        for parte in resposta.content.replace('\n', ' ').split():
-            if "youtube.com/" in parte or "youtu.be/" in parte or "soundcloud.com/" in parte:
-                links_validos_mensagem.append(parte)
-
-        if not links_validos_mensagem:
-            await ctx.send("Nenhum link válido do YouTube ou SoundCloud foi encontrado.")
-            return
-
-        for link in links_validos_mensagem:
-            music_queue.append({"title": None, "url": link})
-
-        await ctx.send(f"{len(links_validos_mensagem)} músicas adicionadas à fila! Use `!tocar` para começar a reprodução.")
-    except asyncio.TimeoutError:
-        await ctx.send("Tempo esgotado! Por favor, tente novamente.")
+    for link in links:
+        # Verifica se o link é uma playlist do YouTube ou SoundCloud
+        if "playlist?list=" in link or "/sets/" in link or "&list" in link:
+            await ctx.send(
+                "Estou lendo a playlist, saiba que quanto maior a playlist, mais demorada será a leitura dela. "
+                "Se desejar parar o processo, use `!parar`. Cada música leva em média 1s para ser lida."
+            )
+            loop = asyncio.get_event_loop()
+            try:
+                data = await loop.run_in_executor(None, lambda: ytdl.extract_info(link, download=False))
+                if "entries" in data:
+                    for entry in data["entries"]:
+                        music_queue.append({"title": entry.get("title", "Música"), "url": entry.get("url")})
+                    await ctx.send(f"Playlist adicionada à fila com **{len(data['entries'])} músicas**!")
+            except Exception as e:
+                await ctx.send(f"Erro ao processar a playlist: {link}")
+                print(f"Erro ao processar a playlist {link}: {e}")
+        else:
+            # Caso seja um link de música única
+            loop = asyncio.get_event_loop()
+            try:
+                data = await loop.run_in_executor(None, lambda: ytdl.extract_info(link, download=False))
+                music_queue.append({"title": data.get("title", "Música"), "url": data.get("url")})
+                await ctx.send(f"Adicionado à fila: **{data.get('title', 'Música')}**")
+            except Exception as e:
+                await ctx.send(f"Erro ao processar o link: {link}")
+                print(f"Erro ao processar o link {link}: {e}")
 
 @bot.command()
 async def fila(ctx):
     if len(music_queue) == 0:
-        await ctx.send("A fila está vazia no momento... Você pode adicionar músicas com `!addfila <URL>`")
+        await ctx.send("A fila está vazia no momento... Você pode adicionar músicas com `!tocar <URL>`")
     else:
         fila_formatada = ""
         for i, item in enumerate(music_queue, start=1):
             fila_formatada += f"**{i}.** {item['title']}\n"
         
-        await ctx.send(f"🎵 Tem **{len(music_queue)}** músicas na fila.")
+        await ctx.send(f"🎵 Tem **{len(music_queue)}** músicas na fila:\n{fila_formatada}")
 
 @bot.command()
 async def loop(ctx):
-    global looping
+    global looping, current_audio
     if not ctx.voice_client or not ctx.voice_client.is_playing():
         await ctx.send("Não há nenhuma música tocando para ativar o loop.")
         return
 
-    looping["enabled"] = True
-    await ctx.send("Loop ativado! A música atual será repetida indefinidamente.")
-    looping["current_song"] = {"url": ctx.current_audio.source, "title": "Música em loop"}
-
-@bot.command()
-async def continuar(ctx):
-    global looping
-    if not looping["enabled"]:
-        await ctx.send("O loop não está ativado.")
-        return
-
-    looping["enabled"] = False
-    looping["current_song"] = None
-    await ctx.send("Loop desativado! A fila de músicas será retomada.")
+    if looping["enabled"]:
+        looping["enabled"] = False
+        looping["current_song"] = None
+        await ctx.send("Loop desativado! A fila de músicas será retomada.")
+    else:
+        if current_audio is None:
+            await ctx.send("Nenhuma música está sendo tocada no momento.")
+            return
+        looping["enabled"] = True
+        looping["current_song"] = {"url": current_audio["source"], "title": current_audio["title"]}
+        await ctx.send(f"Loop ativado! A música atual será repetida: **{current_audio['title']}**")
 
 @bot.command()
 async def proximo(ctx):
@@ -487,12 +480,16 @@ async def retomar(ctx):
 
 @bot.command()
 async def parar(ctx):
+    global looping
     if ctx.voice_client:
-        ctx.voice_client.stop()  # Para a música atual
-        music_queue.clear()  # Limpa a fila de músicas
-        await ctx.send("A música foi parada e a fila foi limpa!")
-    elif ctx.voice_client:
-        await ctx.send("Não há nenhuma música tocando no momento.")
+        ctx.voice_client.stop()
+        music_queue.clear()  
+        if looping["enabled"]:
+            looping["enabled"] = False
+            looping["current_song"] = None
+            await ctx.send("A música foi parada, o loop foi desativado e a fila foi limpa!")
+        else:
+            await ctx.send("A música foi parada e a fila foi limpa!")
     else:
         await ctx.send("Não estou conectado a nenhum canal de voz.")
 
@@ -590,14 +587,23 @@ async def piada(ctx):
         "Por que o livro de matemática ficou triste? Porque tinha muitos problemas!",
         "O que o tomate foi fazer no banco? Tirar extrato!",
         "Por que o computador foi ao médico? Porque estava com um vírus!",
-        "O que é um pontinho amarelo no céu? Um super-tamanco!",
-        "Por que a vaca foi para o espaço? Para se tornar um espaço-gado!",
-        "O que o zero disse para o oito? Que cinto bonito!",
+        "Há quem diga que Mc Kevin foi melhor que Michael Jackson mas, pelo menos Michael Jackson ia até o chão e voltava",
+        "O que as pernas de um paraplégico tem em comum com o comunismo? Ambos não funcionam.",
+        "Joga um preto pra cima, se cair é merda, se voar é urubu, caso se pendurar é macaco.;",
         "Por que o jacaré tirou o filho da escola? Porque ele réptil de ano!",
-        "Qual é o cúmulo do desperdício? Jogar um relógio pela janela para ganhar tempo!",
-        "Por que o fotógrafo foi preso? Porque foi pego em flagrante!",
-        "O que o chão falou para a mesa? Apoie-se em mim, estou aqui para você!",
+        "O elefante caiu na lama, e eu não consigo terminar a piada por que a lama voou e não deu pra ver mais nada.",
+        "Qual a semelhança entre um carro com pneu furado e uma preta grávida? Ambos estão esperando um macaco.",
+        "Sabem pq as crianças africanas n escovam os dentes ? Pq só pode escovar dps de comer.",
+        "Qual a diferencia entre um preto e um macaco? ... Pois é",
+        "Pq o batman cobre só metade do rosto ? Para a polícia ver q ele e branco e n prender ele.",
+        "Uma vez eu estava lendo um livro, porém o vilão da história era muito mal compreendido e estava certo, qual o nome do livro ? Mein Kampf",
+        "Qual é a diferença entre uma pizza e um judeu? Só da pra colocar uma pizza no forno.",
         "Porque é que não existem medicamentos na Etiópia? Porque não podem ser tomados em jejum.",
+        "Estava uma menina a brincar com a cinza de um cinzeiro quando chega o Hitler e lhe pergunta: Estás prrocurrando alguém em especial?",
+        "Qual é a diferença entre um rabino e um psiquiatra?” “Um cobra mais caro do que o outro.",
+        "Qual é a diferença entre um judeu rico e um judeu pobre?” “O judeu rico come o frango, enquanto o judeu pobre sacrifica o frango para ficar rico.",
+        "Sabe Qual é a melhor piada para um judeu? Só Te Conto Se Me Pagar.",
+        "Um judeu rabino vai ao mesmo barbeiro e corta o cabelo. 'Não posso te cobrar, você é um homem de Deus.'\nNo dia seguinte, o barbeiro encontra uma dúzia de rabinos em sua porta.",
         "Uma pessoa foi ao psicólogo e perguntou: Doutor, tenho tendências suicidas, o que faço? Em primeiro lugar, pague a consulta.",
         "Qual a diferença entre um padre e um tenista? As bolas com que o tenista brinca têm pelinhos.",
         "Qual é a parte mais dura de um vegetal? A cadeira de rodas.",
@@ -663,7 +669,7 @@ async def analisar(ctx, *, prompt: str = None):
     img_bytes = await imagem.read()
 
     try:
-        model = genai.GenerativeModel("models/gemini-2.0-flash")  # Troque pelo modelo disponível
+        model = genai.GenerativeModel("models/gemini-2.5-flash")  # Troque pelo modelo disponível
         
         # Define o prompt padrão caso o usuário não forneça um
         if prompt is None:
@@ -700,12 +706,10 @@ async def analisar(ctx, *, prompt: str = None):
         await ctx.send("Não consegui analisar a imagem. Tente novamente.")
         print(f"Erro na análise de imagem: {e}")
 
-
 @bot.tree.command(name="souprotofox", description="Repete a mensagem que você enviar.")
 async def souprotofox(interaction: discord.Interaction, fala: str):
     await interaction.response.send_message(fala, ephemeral=True)
     await interaction.channel.send(fala)
-
 
 
 
@@ -797,7 +801,6 @@ async def ajuda_slash(interaction: discord.Interaction):
         "`!fila` - Mostra a fila de músicas.\n"
         "`!addfila` - Adiciona uma música na fila.\n"
         "`!loop` - Faz a música atual tocar em looping.\n"
-        "`!continuar` - Para o looping e continua a fila.\n"
         "`!proximo` - Pula a música atual e toca a próxima da fila.\n"
         "`!pausar` - Pausa a música atual.\n"
         "`!retomar` - Retoma a música pausada.\n"
@@ -846,4 +849,3 @@ async def on_ready():
 #    await aviso.send(f'Commit versão {version} foi feito.')
 
 bot.run(Token)
-
